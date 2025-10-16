@@ -1,0 +1,44 @@
+name: Deploy Cloud Run (ETL)
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'deploy-*'
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      REGION: ${{ secrets.GCP_REGION }}
+      SERVICE: vinrecall-etl
+      REPOSITORY: vinrecall
+      IMAGE: etl
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+      - name: Build & push image via Cloud Build
+        run: |
+          gcloud builds submit \
+            --tag $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }}
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy $SERVICE \
+            --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:${{ github.sha }} \
+            --region $REGION \
+            --platform managed \
+            --allow-unauthenticated=false \
+            --set-secrets 'DATABASE_URL=DATABASE_URL:latest,GITHUB_TOKEN=GITHUB_TOKEN:latest' \
+            --max-instances=3 --concurrency=20
+      - name: Show service URL
+        run: |
+          gcloud run services describe $SERVICE --region $REGION --format='value(status.url)'
